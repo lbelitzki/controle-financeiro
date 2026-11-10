@@ -182,6 +182,39 @@ button.linha { width: 100%; background: none; border-left: 0; border-right: 0; b
 .carregando[hidden] { display: none; }
 .spinner { width: 42px; height: 42px; border: 4px solid rgba(255,255,255,.5); border-top-color: var(--pri); border-radius: 50%; animation: gira .8s linear infinite; }
 
+/* saldo geral e painel */
+:root { --c-entrada: #0F7B5F; --c-gasto: #D9722B; --c-saldo: #3A6FD8; }
+@media (prefers-color-scheme: dark) { :root { --c-entrada: #3CC093; --c-gasto: #F0954F; --c-saldo: #7EA6F5; } }
+.topo-acoes { display: flex; gap: 8px; }
+.saldo-geral .valor { font-size: 30px; font-weight: 700; letter-spacing: -.02em; margin: 2px 0 10px; }
+.saldo-linhas { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--txt2); }
+.saldo-linhas b { color: var(--txt); font-weight: 600; margin-left: 4px; }
+.linha.total { border-top: 2px solid var(--linha); }
+.linha.total .meio b, .linha.total .dir { font-weight: 700; }
+.centro { text-align: center; margin: -4px 0 12px; }
+.resumo .card:not(.destaque) .valor { font-size: 18px; }
+svg.grafico { width: 100%; height: auto; display: block; overflow: visible; touch-action: pan-y; }
+svg.grafico .grade { stroke: var(--linha); stroke-width: 1; }
+svg.grafico .base { stroke: var(--txt2); stroke-width: 1; opacity: .5; }
+svg.grafico .eixo { fill: var(--txt2); font-size: 10px; }
+svg.grafico .rotulo-svg { fill: var(--txt); font-size: 11px; font-weight: 600; }
+svg.grafico .vazio-svg { fill: var(--txt2); font-size: 12px; }
+svg.mini { width: 66px; height: 22px; flex: none; }
+.legenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--txt2); margin: -4px 0 8px; }
+.legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--c); margin-right: 6px; vertical-align: -1px; }
+.legenda i.hach { background: repeating-linear-gradient(45deg, var(--c) 0 2px, transparent 2px 4px); border: 1px solid var(--c); }
+.legenda i.tracejado { height: 0; width: 14px; border-radius: 0; border-top: 2px dashed var(--c); background: none; vertical-align: 3px; }
+.barra.com-marca { position: relative; overflow: visible; }
+.barra.com-marca b { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--txt); border-radius: 1px; }
+.conta-linha { cursor: default; }
+.mais-itens summary { color: var(--pri); font-weight: 600; font-size: 14px; padding: 8px 0 2px; cursor: pointer; list-style: none; }
+.mais-itens summary::-webkit-details-marker { display: none; }
+.mais-itens[open] summary { display: none; }
+.dica-grafico { position: fixed; z-index: 50; pointer-events: none; background: var(--txt); color: var(--bg); border-radius: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.5; max-width: 240px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.dica-grafico b { display: block; }
+.dica-grafico span { display: block; white-space: nowrap; }
+.dica-grafico span i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+
 .setup { padding-top: 30px; }
 .setup h2 { font-size: 26px; margin: 0 0 8px; }
 .setup p { color: var(--txt2); }

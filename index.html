@@ -17,22 +17,26 @@
 <body>
   <header class="topo">
     <h1 id="titulo">Finanças</h1>
-    <button class="icone-btn" id="btn-atualizar" aria-label="Atualizar">⟳</button>
+    <div class="topo-acoes">
+      <button class="icone-btn" id="btn-atualizar" aria-label="Atualizar">⟳</button>
+      <button class="icone-btn" id="btn-ajustes" aria-label="Ajustes">⚙</button>
+    </div>
   </header>
 
   <main id="app"></main>
 
   <nav class="abas" id="abas">
     <button data-tela="inicio" class="ativa"><span>◉</span>Início</button>
-    <button data-tela="faturas"><span>▤</span>Faturas</button>
+    <button data-tela="painel"><span>◔</span>Painel</button>
     <button data-tela="lancar" class="mais" aria-label="Novo lançamento"><span>+</span></button>
+    <button data-tela="faturas"><span>▤</span>Faturas</button>
     <button data-tela="lista"><span>☰</span>Lançamentos</button>
-    <button data-tela="ajustes"><span>⚙</span>Ajustes</button>
   </nav>
 
   <div id="modal" class="modal" hidden></div>
   <div id="toast" class="toast" hidden></div>
   <div id="carregando" class="carregando" hidden><div class="spinner"></div></div>
+  <div id="dica-grafico" class="dica-grafico" hidden></div>
 
   <script src="app.js"></script>
 </body>
