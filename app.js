@@ -246,7 +246,13 @@ function ligarSetup() {
       await api('ler');
       localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg));
       toast('Conectado!'); ir('inicio');
-    } catch (e) { S.cfg = null; toast(e.message, true); }
+    } catch (e) {
+      const url = S.cfg.u; S.cfg = null;
+      if (/failed to fetch|load failed|networkerror/i.test(e.message)) {
+        toast(/\/dev$/.test(url) ? 'O código usa o endereço de teste (/dev). Gere de novo com a URL que termina em /exec.' :
+          'Não consegui falar com a planilha. Confira se a implantação está com acesso "Qualquer pessoa".', true);
+      } else toast(e.message, true);
+    }
     finally { carregando(false); }
   };
 }

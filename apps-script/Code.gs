@@ -50,9 +50,14 @@ function configurar() {
   Logger.log('Pronto! Agora implante como App da Web e rode codigoDoApp().');
 }
 
+// Se o endereço sair terminando em /dev, cole aqui o endereço do App da Web
+// (Implantar > Gerenciar implantações > URL terminando em /exec) e rode de novo.
+var URL_DO_APP = '';
+
 function codigoDoApp() {
-  var url = ScriptApp.getService().getUrl();
+  var url = URL_DO_APP || ScriptApp.getService().getUrl();
   if (!url) throw new Error('Implante primeiro: Implantar > Nova implantação > App da Web.');
+  if (!/\/exec$/.test(url)) throw new Error('O endereço precisa terminar em /exec. Copie a URL em Implantar > Gerenciar implantações, cole em URL_DO_APP (no topo desta função) e rode de novo.');
   var token = PropertiesService.getScriptProperties().getProperty('TOKEN');
   var codigo = Utilities.base64EncodeWebSafe(JSON.stringify({ u: url, t: token }));
   Logger.log('Código do app (copie tudo):\n\n' + codigo);
