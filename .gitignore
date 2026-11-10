@@ -1,0 +1,5 @@
+# dados pessoais e segredos — nunca publicar
+privado/
+*.csv
+*.pdf
+.DS_Store

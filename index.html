@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Finanças</title>
+  <meta name="theme-color" content="#0F7B5F">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Finanças">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topo">
+    <h1 id="titulo">Finanças</h1>
+    <button class="icone-btn" id="btn-atualizar" aria-label="Atualizar">⟳</button>
+  </header>
+
+  <main id="app"></main>
+
+  <nav class="abas" id="abas">
+    <button data-tela="inicio" class="ativa"><span>◉</span>Início</button>
+    <button data-tela="faturas"><span>▤</span>Faturas</button>
+    <button data-tela="lancar" class="mais" aria-label="Novo lançamento"><span>+</span></button>
+    <button data-tela="lista"><span>☰</span>Lançamentos</button>
+    <button data-tela="ajustes"><span>⚙</span>Ajustes</button>
+  </nav>
+
+  <div id="modal" class="modal" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <div id="carregando" class="carregando" hidden><div class="spinner"></div></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
