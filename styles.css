@@ -223,3 +223,19 @@ svg.mini { width: 66px; height: 22px; flex: none; }
 .pessoas { display: flex; gap: 8px; flex-wrap: wrap; }
 .pessoas div { flex: 1; min-width: 90px; background: var(--bg); border-radius: 12px; padding: 10px; }
 .pessoas b { display: block; font-size: 15px; }
+
+/* painel: abas, insights, tabela */
+.segmento.tres { grid-template-columns: repeat(3, 1fr); }
+.insights { list-style: none; margin: 0; padding: 0; }
+.insights li { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--linha); font-size: 14px; line-height: 1.45; }
+.insights li:first-child { border-top: 0; padding-top: 0; }
+.insights li > span:first-child { flex: none; width: 22px; text-align: center; }
+.insights li.alerta b { color: var(--verm); }
+.tres-num div { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--linha); }
+.tres-num div:first-child { border-top: 0; padding-top: 0; }
+.tres-num .rotulo { font-size: 14px; }
+.tres-num b { font-size: 16px; white-space: nowrap; }
+.tabela { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tabela th, .tabela td { padding: 7px 4px; text-align: right; border-top: 1px solid var(--linha); white-space: nowrap; }
+.tabela thead th { border-top: 0; color: var(--txt2); font-weight: 500; font-size: 12px; }
+.tabela tbody th { text-align: left; font-weight: 500; text-transform: capitalize; }

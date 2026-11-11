@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const VERSAO = '1.1.0';
+const VERSAO = '1.2.0';
 const CHAVE_CFG = 'cf_config';
 const CHAVE_CACHE = 'cf_cache';
 const CHAVE_UI = 'cf_ui';
@@ -375,60 +375,61 @@ function saldoEm(c, data) {
 }
 function fimDoMes(ym) { const [y, m] = ym.split('-').map(Number); const f = `${ym}-${pad(ultimoDia(y, m))}`; return f > hoje() ? hoje() : f; }
 
-function dadosPainel() {
-  const M = S.mes, atual = mesAtual();
-  const meses = Array.from({ length: N_MESES }, (_, i) => somaMes(M, i - (N_MESES - 1)));
-  const futuros = Array.from({ length: N_MESES }, (_, i) => somaMes(M, i + 1));
-  const primeiro = S.lanc.reduce((m, l) => { const c = competencia(l); return c && (!m || c < m) ? c : m; }, '');
+const primeiroMes = () => S.lanc.reduce((m, l) => { const c = competencia(l); return c && (!m || c < m) ? c : m; }, '');
+const aVista = ls => ls.filter(l => !(l.parcelas > 1));
+const nomeCat = l => l.categoria || 'Sem categoria';
+const somaPor = (ls, chave) => ls.reduce((r, l) => { const k = chave(l); r[k] = (r[k] || 0) + l.valor; return r; }, {});
+const pct = (a, b) => b > 0.004 ? Math.round(a / b * 100) : 0;
+const contasAtivas = () => S.contas.filter(c => c.ativo !== 'não' && c.ativo !== 'nao');
+
+// janela de 6 meses terminando em `fim`; médias só nos meses que já têm dados
+function janela(fim) {
+  const atual = mesAtual(), primeiro = primeiroMes();
+  const meses = Array.from({ length: N_MESES }, (_, i) => somaMes(fim, i - (N_MESES - 1)));
   const comDados = meses.filter(ym => primeiro && ym >= primeiro && ym <= atual);
   const media = f => comDados.length ? comDados.reduce((s, ym) => s + f(ym), 0) / comDados.length : 0;
+  const porCat = (tipo, fonte, ref = fim) => {
+    const r = {};
+    comDados.forEach(ym => Object.entries(somaPor(fonte(ym), nomeCat)).forEach(([k, v]) => (r[k] = (r[k] || 0) + v)));
+    const m = somaPor(fonte(ref), nomeCat);
+    return Object.keys({ ...r, ...m }).map(k => ({ nome: k, cat: categoria(k, tipo), media: (r[k] || 0) / (comDados.length || 1), total: r[k] || 0, mes: m[k] || 0 }))
+      .filter(x => x.media > 0.004 || x.mes > 0.004);
+  };
+  const porConta = () => contasAtivas().map(c => {
+    const vals = meses.map(ym => soma(gastosDoMes(ym).filter(l => l.conta === c.id)));
+    return { c, vals, media: media(ym => vals[meses.indexOf(ym)]), mes: vals[vals.length - 1] };
+  }).filter(x => x.vals.some(v => v > 0.004)).sort((a, b) => b.media - a.media);
+  return {
+    fim, meses, comDados, media, porCat, porConta,
+    ent: meses.map(ym => soma(entradasDoMes(ym))),
+    gas: meses.map(ym => soma(gastosDoMes(ym))),
+    mediaEnt: media(ym => soma(entradasDoMes(ym))),
+    mediaGas: media(ym => soma(gastosDoMes(ym))),
+    mediaVar: media(ym => soma(aVista(gastosDoMes(ym)))),
+  };
+}
+// base para médias e projeções: meses fechados quando já houver 3 ou mais; senão inclui o mês atual
+function baseMedias() {
+  const fechados = janela(somaMes(mesAtual(), -1));
+  return fechados.comDados.length >= 3 ? fechados : janela(mesAtual());
+}
+// faturas não pagas que já venceram ou vencem até o fim do mês atual
+const faturasDoMesEmAberto = () => cartoes().flatMap(c => faturasDoCartao(c.id).filter(f => f.ym <= mesAtual() && f.status !== 'paga' && f.status !== 'vazia'));
 
-  const ent = meses.map(ym => soma(entradasDoMes(ym)));
-  const gas = meses.map(ym => soma(gastosDoMes(ym)));
-  const mediaEnt = media(ym => soma(entradasDoMes(ym)));
-  const mediaGas = media(ym => soma(gastosDoMes(ym)));
-  const aVista = ls => ls.filter(l => !(l.parcelas > 1));
-  const mediaVar = media(ym => soma(aVista(gastosDoMes(ym))));
-
+function dadosProjecao() {
+  const B = baseMedias(), atual = mesAtual();
+  const futuros = Array.from({ length: N_MESES }, (_, i) => somaMes(atual, i + 1));
   const proj = futuros.map(ym => {
     const ls = gastosDoMes(ym);
     const comp = soma(ls);
-    const est = Math.max(0, mediaVar - soma(aVista(ls)));
-    return { ym, comp, est, total: comp + est };
+    const est = Math.max(0, B.mediaVar - soma(aVista(ls)));
+    return { ym, ls, comp, est, total: comp + est, ent: B.mediaEnt };
   });
-
-  // por categoria (média mensal e mês de referência)
-  const porCat = (tipo, fonte) => {
-    const r = {};
-    comDados.forEach(ym => fonte(ym).forEach(l => { const k = l.categoria || 'Sem categoria'; r[k] = (r[k] || 0) + l.valor; }));
-    const mesRef = {};
-    fonte(M).forEach(l => { const k = l.categoria || 'Sem categoria'; mesRef[k] = (mesRef[k] || 0) + l.valor; });
-    return Object.keys({ ...r, ...mesRef }).map(k => ({ nome: k, cat: categoria(k, tipo), media: (r[k] || 0) / (comDados.length || 1), total: r[k] || 0, mes: mesRef[k] || 0 }))
-      .filter(x => x.media > 0.004 || x.mes > 0.004).sort((a, b) => b.media - a.media || b.mes - a.mes);
-  };
-
-  const porConta = S.contas.filter(c => c.ativo !== 'não' && c.ativo !== 'nao').map(c => {
-    const vals = meses.map(ym => soma(gastosDoMes(ym).filter(l => l.conta === c.id)));
-    const med = comDados.length ? comDados.reduce((s, ym) => s + vals[meses.indexOf(ym)], 0) / comDados.length : 0;
-    return { c, vals, media: med, mes: vals[vals.length - 1] };
-  }).filter(x => x.vals.some(v => v > 0.004)).sort((a, b) => b.media - a.media);
-
-  // saldo geral: histórico (fim de cada mês) + projeção
-  const contas = contasCorrentes();
-  const hist = meses.filter(ym => ym <= atual && (!primeiro || ym >= primeiro))
-    .map(ym => ({ ym, v: contas.reduce((s, c) => s + saldoEm(c, fimDoMes(ym)), 0) }));
-  const saldoHoje = contas.reduce((s, c) => s + saldoConta(c), 0);
-  const projSaldo = [];
-  let s = saldoHoje;
-  for (let k = 1; k <= 3; k++) {
-    const ym = somaMes(atual, k);
-    const p = proj.find(x => x.ym === ym) || { total: soma(gastosDoMes(ym)) };
-    s += mediaEnt - p.total;
-    projSaldo.push({ ym, v: s, proj: true });
-  }
-
-  return { meses, futuros, comDados, ent, gas, mediaEnt, mediaGas, mediaVar, proj, porConta, hist, projSaldo, saldoHoje,
-    catGas: porCat('despesa', gastosDoMes), catEnt: porCat('entrada', entradasDoMes) };
+  const saldoHoje = contasCorrentes().reduce((s, c) => s + saldoConta(c), 0);
+  const pendente = faturasDoMesEmAberto().reduce((s, f) => s + f.restante, 0);
+  let s = saldoHoje - pendente;
+  proj.forEach(p => { s += p.ent - p.total; p.saldo = s; });
+  return { B, futuros, proj, saldoHoje, pendente, inicio: saldoHoje - pendente };
 }
 
 /* ---- gráficos em SVG ---- */
@@ -505,87 +506,279 @@ function graficoLinha(pontos, cor) {
   pontos.forEach((p, i) => {
     svg += `<circle cx="${x(i)}" cy="${y(p.v)}" r="4" fill="${p.proj ? 'var(--card)' : cor}" stroke="${p.proj ? cor : 'var(--card)'}" stroke-width="2"/>`;
     svg += `<text x="${x(i)}" y="${H - 6}" class="eixo" text-anchor="middle">${n > 6 ? MESES[+p.ym.slice(5) - 1] : nomeMes(p.ym)}</text>`;
-    svg += `<rect x="${x(i) - gw / 2}" y="${T}" width="${gw}" height="${H - T - B}" fill="transparent" data-tip="${esc(`<b>${nomeMes(p.ym, true)}</b><span>${p.proj ? 'Projeção' : 'Saldo no fim do mês'}: ${brl(p.v)}</span>`)}"/>`;
+    svg += `<rect x="${x(i) - gw / 2}" y="${T}" width="${gw}" height="${H - T - B}" fill="transparent" data-tip="${esc(`<b>${nomeMes(p.ym, true)}</b><span>${p.rotulo || (p.proj ? 'Projeção' : 'Saldo no fim do mês')}: ${brl(p.v)}</span>`)}"/>`;
   });
   const ult = real[real.length - 1];
   if (ult) svg += `<text x="${Math.min(x(ult.i), W - R - 2)}" y="${y(ult.v) - 9}" class="rotulo-svg" text-anchor="${ult.i === n - 1 ? 'end' : 'middle'}">${brlCurto(ult.v)}</text>`;
   return `<svg viewBox="0 0 ${W} ${H}" class="grafico" role="img">${svg}</svg>`;
 }
-function miniColunas(vals, cor) {
+function miniColunas(vals, cor, primeiro) {
   const W = 66, H = 22, n = vals.length, mx = Math.max(...vals, 0.01), bw = W / n - 3;
-  return `<svg viewBox="0 0 ${W} ${H}" class="mini">${vals.map((v, i) => { const h = Math.max(v > 0 ? 2 : 0, (H - 2) * v / mx); return `<rect x="${i * (bw + 3)}" y="${H - h}" width="${bw}" height="${h}" rx="1.5" fill="${cor}" opacity="${i === n - 1 ? 1 : .45}"/>`; }).join('')}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="mini">${vals.map((v, i) => { const h = Math.max(v > 0 ? 2 : 0, (H - 2) * v / mx); return `<rect x="${i * (bw + 3)}" y="${H - h}" width="${bw}" height="${h}" rx="1.5" fill="${cor}" opacity="${i === (primeiro ? 0 : n - 1) ? 1 : .45}"/>`; }).join('')}</svg>`;
 }
 const legenda = itens => `<div class="legenda">${itens.map(i => `<span><i class="${i.tipo || ''}" style="--c:${i.cor}"></i>${esc(i.nome)}</span>`).join('')}</div>`;
 
-function barrasMedia(lista, vazio) {
+// lista de barras horizontais: barra = valor(x), traço opcional = marca(x)
+function barras(lista, vazio, { valor, marca, sufixo = '', tip }) {
   if (!lista.length) return `<div class="vazio">${vazio}</div>`;
-  const mx = Math.max(...lista.map(x => Math.max(x.media, x.mes)), 0.01);
-  const item = x => `<div class="barra-item" data-tip="${esc(`<b>${esc(x.nome)}</b><span>Média mensal: ${brl(x.media)}</span><span>Mês selecionado: ${brl(x.mes)}</span><span>Total no período: ${brl(x.total)}</span>`)}">
-    <div class="topo-b"><span>${esc(x.cat.icone || '')} ${esc(x.nome)}</span><span class="num">${brl(x.media)}<small class="rotulo"> /mês</small></span></div>
-    <div class="barra com-marca"><i style="width:${(x.media / mx * 100).toFixed(1)}%;background:${esc(x.cat.cor || '#9AA0A6')}"></i><b style="left:${(x.mes / mx * 100).toFixed(1)}%"></b></div>
+  const mx = Math.max(...lista.map(x => Math.max(valor(x), marca ? marca(x) : 0)), 0.01);
+  const item = x => `<div class="barra-item"${tip ? ` data-tip="${esc(tip(x))}"` : ''}>
+    <div class="topo-b"><span>${esc(x.cat?.icone || '')} ${esc(x.nome)}</span><span class="num">${brl(valor(x))}${sufixo ? `<small class="rotulo"> ${sufixo}</small>` : ''}</span></div>
+    <div class="barra${marca ? ' com-marca' : ''}"><i style="width:${(valor(x) / mx * 100).toFixed(1)}%;background:${esc(x.cor || x.cat?.cor || '#9AA0A6')}"></i>${marca && marca(x) > 0.004 ? `<b style="left:${(marca(x) / mx * 100).toFixed(1)}%"></b>` : ''}</div>
   </div>`;
   const LIM = 7;
   return lista.slice(0, LIM).map(item).join('') +
     (lista.length > LIM ? `<details class="mais-itens"><summary>Ver mais ${lista.length - LIM}</summary>${lista.slice(LIM).map(item).join('')}</details>` : '');
 }
+const insights = itens => itens.length
+  ? `<ul class="insights">${itens.map(i => `<li class="${i.alerta ? 'alerta' : ''}"><span>${i.ico}</span><span>${i.txt}</span></li>`).join('')}</ul>`
+  : '<div class="vazio">Ainda não há dados suficientes</div>';
+const COR = { ent: 'var(--c-entrada)', gas: 'var(--c-gasto)', saldo: 'var(--c-saldo)' };
+const ABAS_PAINEL = { atual: 'Atual', projetado: 'Projetado', historico: 'Histórico' };
 
 function telaPainel() {
-  const D = dadosPainel();
-  const n = D.comDados.length;
+  const aba = ABAS_PAINEL[S.ui.painelAba] ? S.ui.painelAba : 'atual';
+  const seg = `<div class="segmento tres">${Object.entries(ABAS_PAINEL).map(([k, n]) => `<button data-paba="${k}" class="${k === aba ? 'ativo' : ''}">${n}</button>`).join('')}</div>`;
+  return seg + ({ atual: painelAtual, projetado: painelProjetado, historico: painelHistorico })[aba]();
+}
+ligar.painel = () => {
+  $$('[data-paba]').forEach(b => b.onclick = () => { S.ui.painelAba = b.dataset.paba; salvarUI(); render(); });
+  ligarMesNav(); ligarMiniFaturas();
+};
+
+/* ---- aba Atual ---- */
+function painelAtual() {
+  const M = mesAtual(), B = janela(somaMes(M, -1)); // médias dos meses anteriores, para comparar
+  const contas = contasCorrentes().map(c => ({ c, v: saldoConta(c) }));
+  const saldoTotal = contas.reduce((s, x) => s + x.v, 0);
+  // faturas em aberto: todas as não pagas até a fatura atual de cada cartão
+  const fats = cartoes().flatMap(c => {
+    const at = faturaDaCompra(c, hoje());
+    const ab = faturasDoCartao(c.id).filter(f => f.ym <= at && f.status !== 'paga' && f.status !== 'vazia');
+    return ab.length ? ab : [];
+  });
+  const totFat = fats.reduce((s, f) => s + f.restante, 0);
+  const emDia = cartoes().filter(c => !fats.some(f => f.conta.id === c.id));
+
+  const desp = gastosDoMes(M), totD = soma(desp), totE = soma(entradasDoMes(M));
+  const cats = B.porCat('despesa', gastosDoMes, M).filter(x => x.mes > 0.004).sort((a, b) => b.mes - a.mes);
+  const temMedia = B.comDados.length > 0;
+  const porConta = contasAtivas().map(c => ({ nome: c.nome, cor: c.cor, cat: { icone: c.tipo === 'cartao' ? '💳' : '🏦' }, v: soma(desp.filter(l => l.conta === c.id)) }))
+    .filter(x => x.v > 0.004).sort((a, b) => b.v - a.v);
+
+  // insights do mês
+  const ins = [];
+  if (saldoTotal - totFat < 0) ins.push({ ico: '⚠️', alerta: true, txt: `As faturas em aberto (<b>${brl(totFat)}</b>) passam do saldo das contas em <b>${brl(totFat - saldoTotal)}</b>.` });
+  if (cats[0]) ins.push({ ico: '🏆', txt: `Onde você mais gasta: <b>${esc(cats[0].nome)}</b>, ${brl(cats[0].mes)} (${pct(cats[0].mes, totD)}% dos gastos do mês).` });
+  if (temMedia) {
+    const acima = cats.filter(x => x.media > 0.004 && x.mes - x.media > 50 && x.mes > x.media * 1.2).sort((a, b) => (b.mes - b.media) - (a.mes - a.media))[0];
+    if (acima) ins.push({ ico: '📈', txt: `<b>${esc(acima.nome)}</b> está ${brl(acima.mes - acima.media)} acima da média (+${pct(acima.mes - acima.media, acima.media)}%).` });
+    const novo = cats.filter(x => x.media <= 0.004).sort((a, b) => b.mes - a.mes)[0];
+    if (novo && novo.mes > 100 && novo !== cats[0])
+      ins.push({ ico: '🆕', txt: `<b>${esc(novo.nome)}</b> apareceu este mês: ${brl(novo.mes)}.` });
+  }
+  const maior = desp.slice().sort((a, b) => b.valor - a.valor)[0];
+  if (maior) ins.push({ ico: '🧾', txt: `Maior gasto do mês: <b>${esc(maior.descricao || maior.categoria)}</b>, ${brl(maior.valor)}${maior.parcelas > 1 ? ` (parcela ${maior.parcela}/${maior.parcelas})` : ''} · ${esc(contaPorId(maior.conta)?.nome || '')}.` });
+  if (porConta[0] && porConta.length > 1) ins.push({ ico: '💳', txt: `<b>${esc(porConta[0].nome)}</b> concentra ${pct(porConta[0].v, totD)}% dos gastos do mês.` });
+  const parc = soma(desp.filter(l => l.parcelas > 1));
+  if (parc > 0.004) ins.push({ ico: '🔁', txt: `${brl(parc)} (${pct(parc, totD)}%) dos gastos do mês são parcelas de compras anteriores.` });
+  if (totE > 0.004) ins.push({ ico: totD > totE ? '⚠️' : '✅', alerta: totD > totE, txt: `Os gastos do mês equivalem a <b>${pct(totD, totE)}%</b> das entradas.` });
+  else if (B.mediaEnt > 0.004 && totD > 0) ins.push({ ico: 'ℹ️', txt: `Os gastos do mês equivalem a ${pct(totD, B.mediaEnt)}% da sua média de entradas.` });
+
+  return `<div class="resumo">
+    <div class="card destaque"><div class="rotulo">Saldo geral nas contas</div><div class="valor num">${brl(saldoTotal)}</div></div>
+    <div class="card"><div class="rotulo">Faturas em aberto</div><div class="valor num neg">${brl(totFat)}</div></div>
+    <div class="card"><div class="rotulo">Livre após faturas</div><div class="valor num ${saldoTotal - totFat < 0 ? 'neg' : 'pos'}">${brl(saldoTotal - totFat)}</div></div>
+  </div>
+
+  <div class="card"><h2>Contas <small>${brl(saldoTotal)}</small></h2>
+    ${contas.length ? contas.map(({ c, v }) => `<div class="linha"><div class="ico" style="background:${esc(c.cor)}22;color:${esc(c.cor)}">🏦</div><div class="meio"><b>${esc(c.nome)}</b><span>${esc(c.titular || '')}</span></div><div class="dir num ${v < 0 ? 'neg' : ''}">${brl(v)}</div></div>`).join('') +
+      `<div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num ${saldoTotal < 0 ? 'neg' : ''}">${brl(saldoTotal)}</div></div>` : '<div class="vazio">Nenhuma conta cadastrada</div>'}
+  </div>
+
+  <div class="card"><h2>Faturas em aberto <small>${brl(totFat)}</small></h2>
+    ${fats.length ? fats.map(miniFatura).join('') : '<div class="vazio">Nenhuma fatura em aberto</div>'}
+    ${fats.length > 1 ? `<div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num">${brl(totFat)}</div></div>` : ''}
+    ${emDia.length ? `<p class="rotulo">Em dia: ${emDia.map(c => esc(c.nome)).join(', ')}</p>` : ''}
+  </div>
+
+  <div class="card"><h2>${MESES_LONGOS[+M.slice(5) - 1][0].toUpperCase() + MESES_LONGOS[+M.slice(5) - 1].slice(1)} até agora</h2>
+    <div class="tres-num">
+      <div><span class="rotulo">Entradas</span><b class="num pos">${brl(totE)}</b></div>
+      <div><span class="rotulo">Gastos</span><b class="num neg">${brl(totD)}</b></div>
+      <div><span class="rotulo">Resultado</span><b class="num ${totE - totD < 0 ? 'neg' : ''}">${brl(totE - totD)}</b></div>
+    </div>
+  </div>
+
+  <div class="card"><h2>Insights do mês</h2>${insights(ins)}</div>
+
+  <div class="card"><h2>Gastos por categoria <small>${nomeMes(M)}</small></h2>
+    ${barras(cats, 'Sem gastos neste mês', { valor: x => x.mes, marca: temMedia ? x => x.media : null, tip: x => `<b>${esc(x.nome)}</b><span>Este mês: ${brl(x.mes)}</span><span>Média: ${brl(x.media)}</span>` })}
+    ${temMedia && cats.length ? '<p class="rotulo">Barra = este mês · traço = média dos últimos meses</p>' : ''}
+  </div>
+
+  <div class="card"><h2>Gastos por conta e cartão <small>${nomeMes(M)}</small></h2>
+    ${barras(porConta.map(x => ({ ...x, mes: x.v })), 'Sem gastos neste mês', { valor: x => x.v })}
+  </div>`;
+}
+
+/* ---- aba Projetado ---- */
+function painelProjetado() {
+  const P = dadosProjecao(), B = P.B;
+  const n = B.comDados.length;
+  const ult = P.proj[P.proj.length - 1];
+  const totComp = P.proj.reduce((s, p) => s + p.comp, 0);
+  const gastoMedio = P.proj.reduce((s, p) => s + p.total, 0) / P.proj.length;
+
+  // categorias previstas: parcelas já lançadas + média dos gastos à vista
+  const comp = {}; P.proj.forEach(p => Object.entries(somaPor(p.ls, nomeCat)).forEach(([k, v]) => (comp[k] = (comp[k] || 0) + v / N_MESES)));
+  const vista = {}; B.comDados.forEach(ym => Object.entries(somaPor(aVista(gastosDoMes(ym)), nomeCat)).forEach(([k, v]) => (vista[k] = (vista[k] || 0) + v / n)));
+  const catsProj = Object.keys({ ...comp, ...vista }).map(k => ({ nome: k, cat: categoria(k), comp: comp[k] || 0, vista: vista[k] || 0, v: (comp[k] || 0) + (vista[k] || 0) }))
+    .filter(x => x.v > 0.004).sort((a, b) => b.v - a.v);
+
+  const porCartao = contasAtivas().map(c => ({ c, vals: P.futuros.map(ym => soma(gastosDoMes(ym).filter(l => l.conta === c.id))) }))
+    .filter(x => x.vals.some(v => v > 0.004));
+
+  // parcelas que terminam: o valor da última parcela deixa de existir no mês seguinte
+  const fim = [mesAtual(), ...P.futuros.slice(0, -1)].map(ym => {
+    const ls = gastosDoMes(ym).filter(l => l.parcelas > 1 && l.parcela === l.parcelas);
+    return { ym: somaMes(ym, 1), v: soma(ls), ls };
+  }).filter(x => x.v > 0.004).sort((a, b) => b.v - a.v);
+
+  const ins = [];
+  if (!n) ins.push({ ico: 'ℹ️', txt: 'Ainda não há histórico: a projeção considera só as parcelas e faturas já lançadas.' });
+  else if (B.mediaEnt <= 0.004) ins.push({ ico: 'ℹ️', txt: 'Sem entradas registradas no histórico: o saldo projetado considera só os gastos.' });
+  if (P.pendente > 0.004) ins.push({ ico: '📌', txt: `Ainda faltam pagar ${brl(P.pendente)} em faturas deste mês — já descontados do ponto de partida.` });
+  if (totComp > 0.004) ins.push({ ico: '🔒', txt: `<b>${brl(totComp)}</b> já estão comprometidos em parcelas e faturas nos próximos 6 meses.` });
+  const aperto = P.proj.slice().sort((a, b) => (a.ent - a.total) - (b.ent - b.total))[0];
+  if (aperto && aperto.total > 0.004) ins.push({ ico: aperto.ent - aperto.total < 0 ? '⚠️' : '📅', alerta: aperto.ent - aperto.total < 0, txt: `Mês mais apertado: <b>${nomeMes(aperto.ym, true)}</b>, com ${brl(aperto.total)} em gastos previstos${aperto.ent > 0 ? ` (${aperto.ent - aperto.total < 0 ? 'falta' : 'sobra'} ${brl(Math.abs(aperto.ent - aperto.total))})` : ''}.` });
+  if (fim[0]) {
+    const desc = [...new Set(fim[0].ls.map(l => l.descricao))].slice(0, 2).map(esc).join(', ');
+    ins.push({ ico: '🎉', txt: `Em <b>${nomeMes(fim[0].ym, true)}</b> acabam parcelas de ${brl(fim[0].v)}/mês (${desc}${fim[0].ls.length > 2 ? '…' : ''}).` });
+  }
+  const neg = P.proj.find(p => p.saldo < 0);
+  if (neg) ins.push({ ico: '⚠️', alerta: true, txt: `Mantido o ritmo, o saldo geral fica negativo em <b>${nomeMes(neg.ym, true)}</b>.` });
+  else if (n) ins.push({ ico: ult.saldo >= P.inicio ? '📈' : '📉', txt: `Mantido o ritmo, o saldo vai de ${brl(P.inicio)} para <b>${brl(ult.saldo)}</b> em ${nomeMes(ult.ym, true)}.` });
+
+  const linhaSaldo = [{ ym: mesAtual(), v: P.inicio, rotulo: 'Saldo hoje, já sem as faturas do mês' }, ...P.proj.map(p => ({ ym: p.ym, v: p.saldo, proj: true }))];
+
+  return `<p class="rotulo centro">Próximos 6 meses · base: ${n ? `média de ${n} ${n === 1 ? 'mês' : 'meses'} (${nomeMes(B.comDados[0])}–${nomeMes(B.comDados[n - 1])})` : 'sem histórico ainda'}</p>
+  <div class="resumo">
+    <div class="card destaque"><div class="rotulo">Saldo previsto em ${nomeMes(ult.ym, true)}</div><div class="valor num">${brl(ult.saldo)}</div></div>
+    <div class="card"><div class="rotulo">Entradas esperadas</div><div class="valor num pos">${brl(B.mediaEnt)}</div><div class="rotulo">por mês</div></div>
+    <div class="card"><div class="rotulo">Gastos previstos</div><div class="valor num neg">${brl(gastoMedio)}</div><div class="rotulo">por mês</div></div>
+    <div class="card"><div class="rotulo">Já comprometido</div><div class="valor num">${brl(totComp)}</div><div class="rotulo">6 meses</div></div>
+    <div class="card"><div class="rotulo">Sobra prevista</div><div class="valor num ${B.mediaEnt - gastoMedio < 0 ? 'neg' : 'pos'}">${brl(B.mediaEnt - gastoMedio)}</div><div class="rotulo">por mês</div></div>
+  </div>
+
+  <div class="card"><h2>O que esperar</h2>${insights(ins)}</div>
+
+  <div class="card"><h2>Gastos previstos <small>por mês</small></h2>
+    ${legenda([{ nome: 'Já comprometido', cor: COR.gas }, { nome: 'Estimativa do dia a dia', cor: COR.gas, tipo: 'hach' }, { nome: 'Entradas esperadas', cor: COR.ent, tipo: 'tracejado' }])}
+    ${graficoColunas({ meses: P.futuros, empilhado: true, series: [{ nome: 'Comprometido', cor: COR.gas, valores: P.proj.map(p => p.comp) }, { nome: 'Estimativa', cor: COR.gas, hachura: true, valores: P.proj.map(p => p.est) }], linhas: [{ valor: B.mediaEnt, cor: COR.ent }], vazio: 'Sem parcelas futuras' })}
+    <p class="rotulo">Estimativa = média dos gastos à vista (sem parcelas): ${brl(B.mediaVar)}/mês.</p>
+  </div>
+
+  <div class="card"><h2>Saldo geral previsto</h2>
+    ${legenda([{ nome: 'Hoje', cor: COR.saldo }, { nome: 'Projeção', cor: COR.saldo, tipo: 'tracejado' }])}
+    ${graficoLinha(linhaSaldo, COR.saldo)}
+  </div>
+
+  <div class="card"><h2>Mês a mês</h2>
+    <table class="tabela num">
+      <thead><tr><th></th><th>Entradas</th><th>Gastos</th><th>Sobra</th><th>Saldo</th></tr></thead>
+      <tbody>${P.proj.map(p => `<tr><th>${nomeMes(p.ym)}</th><td>${brlCurto(p.ent)}</td><td>${brlCurto(p.total)}</td><td class="${p.ent - p.total < 0 ? 'neg' : ''}">${p.ent - p.total < 0 ? '−' : ''}${brlCurto(Math.abs(p.ent - p.total))}</td><td class="${p.saldo < 0 ? 'neg' : ''}">${p.saldo < 0 ? '−' : ''}${brlCurto(Math.abs(p.saldo))}</td></tr>`).join('')}</tbody>
+    </table>
+  </div>
+
+  <div class="card"><h2>Gastos previstos por categoria <small>por mês</small></h2>
+    ${barras(catsProj, 'Sem dados para prever', { valor: x => x.v, tip: x => `<b>${esc(x.nome)}</b><span>Parcelas já lançadas: ${brl(x.comp)}/mês</span><span>Média à vista: ${brl(x.vista)}/mês</span>` })}
+  </div>
+
+  <div class="card"><h2>Faturas futuras por cartão <small>já lançado</small></h2>
+    ${porCartao.length ? porCartao.map(x => `<div class="linha conta-linha" data-tip="${esc(`<b>${esc(x.c.nome)}</b>` + P.futuros.map((ym, i) => `<span>${nomeMes(ym)}: ${brl(x.vals[i])}</span>`).join(''))}">
+      <span class="ico" style="background:${esc(x.c.cor)}22;color:${esc(x.c.cor)}">${x.c.tipo === 'cartao' ? '💳' : '🏦'}</span>
+      <span class="meio"><b>${esc(x.c.nome)}</b><span>${nomeMes(P.futuros[0])} ${brlCurto(x.vals[0])} · total ${brlCurto(x.vals.reduce((a, b) => a + b, 0))}</span></span>
+      ${miniColunas(x.vals, esc(x.c.cor), true)}
+    </div>`).join('') : '<div class="vazio">Nenhuma parcela futura lançada</div>'}
+  </div>`;
+}
+
+/* ---- aba Histórico ---- */
+function painelHistorico() {
+  const D = janela(S.mes), n = D.comDados.length;
   const base = n ? `média de ${n} ${n === 1 ? 'mês' : 'meses'}` : 'sem histórico ainda';
   const sobra = D.mediaEnt - D.mediaGas;
-  const c = { ent: 'var(--c-entrada)', gas: 'var(--c-gasto)', saldo: 'var(--c-saldo)' };
+  const catGas = D.porCat('despesa', gastosDoMes).sort((a, b) => b.media - a.media || b.mes - a.mes);
+  const catEnt = D.porCat('entrada', entradasDoMes).sort((a, b) => b.media - a.media || b.mes - a.mes);
+  const porConta = D.porConta();
+  const contas = contasCorrentes();
+  const hist = D.comDados.map(ym => ({ ym, v: contas.reduce((s, c) => s + saldoEm(c, fimDoMes(ym)), 0) }));
+
+  const ins = [];
+  if (n) {
+    const idx = D.comDados.map(ym => D.meses.indexOf(ym));
+    const caro = idx.slice().sort((a, b) => D.gas[b] - D.gas[a])[0];
+    if (D.gas[caro] > 0) ins.push({ ico: '💸', txt: `Mês com mais gastos: <b>${nomeMes(D.meses[caro], true)}</b>, ${brl(D.gas[caro])}.` });
+    if (n > 1) {
+      const melhor = idx.slice().sort((a, b) => (D.ent[b] - D.gas[b]) - (D.ent[a] - D.gas[a]))[0];
+      if (D.ent[melhor] > 0) ins.push({ ico: '🏅', txt: `Melhor mês: <b>${nomeMes(D.meses[melhor], true)}</b>, sobrou ${brl(D.ent[melhor] - D.gas[melhor])}.` });
+    }
+    if (D.mediaEnt > 0.004) ins.push({ ico: sobra < 0 ? '⚠️' : '💰', alerta: sobra < 0, txt: sobra < 0 ? `Em média você gasta ${brl(-sobra)} a mais do que entra por mês.` : `Em média sobram ${brl(sobra)} por mês — <b>${pct(sobra, D.mediaEnt)}%</b> das entradas.` });
+    if (catGas[0]) ins.push({ ico: '🏆', txt: `Maior categoria: <b>${esc(catGas[0].nome)}</b>, ${brl(catGas[0].media)}/mês (${pct(catGas[0].media, D.mediaGas)}% dos gastos).` });
+    if (catEnt[0] && D.mediaEnt > 0) ins.push({ ico: '💼', txt: `Principal fonte de entrada: <b>${esc(catEnt[0].nome)}</b> (${pct(catEnt[0].media, D.mediaEnt)}% das entradas).` });
+    if (n >= 4) {
+      const meio = Math.floor(n / 2), ant = D.comDados.slice(0, meio), rec = D.comDados.slice(meio);
+      const mediaEm = (ms, k) => ms.reduce((s, ym) => s + soma(gastosDoMes(ym).filter(l => nomeCat(l) === k)), 0) / ms.length;
+      const var_ = catGas.map(x => ({ x, d: mediaEm(rec, x.nome) - mediaEm(ant, x.nome), a: mediaEm(ant, x.nome) })).sort((a, b) => b.d - a.d);
+      if (var_[0] && var_[0].d > 50) ins.push({ ico: '📈', txt: `<b>${esc(var_[0].x.nome)}</b> é a categoria que mais subiu: +${brl(var_[0].d)}/mês nos meses recentes.` });
+      const caiu = var_[var_.length - 1];
+      if (caiu && caiu.d < -50) ins.push({ ico: '📉', txt: `<b>${esc(caiu.x.nome)}</b> é a que mais caiu: ${brl(caiu.d)}/mês.` });
+    }
+  }
 
   return `${mesNav()}
-  <p class="rotulo centro">Janela: ${nomeMes(D.meses[0])} a ${nomeMes(D.meses[N_MESES - 1])} · ${base}</p>
+  <p class="rotulo centro">${nomeMes(D.meses[0])} a ${nomeMes(D.meses[N_MESES - 1])} · ${base}</p>
   <div class="resumo">
-    <div class="card destaque"><div class="rotulo">Saldo geral hoje</div><div class="valor num">${brl(D.saldoHoje)}</div></div>
+    <div class="card destaque"><div class="rotulo">Sobra média / mês</div><div class="valor num">${brl(sobra)}</div>${D.mediaEnt > 0 ? `<div class="rotulo">${pct(sobra, D.mediaEnt)}% das entradas</div>` : ''}</div>
     <div class="card"><div class="rotulo">Entradas / mês</div><div class="valor num pos">${brl(D.mediaEnt)}</div><div class="rotulo">média</div></div>
     <div class="card"><div class="rotulo">Gastos / mês</div><div class="valor num neg">${brl(D.mediaGas)}</div><div class="rotulo">média</div></div>
-    <div class="card"><div class="rotulo">Sobra média / mês</div><div class="valor num ${sobra < 0 ? 'neg' : 'pos'}">${brl(sobra)}</div></div>
-    <div class="card"><div class="rotulo">Próximo mês (projeção)</div><div class="valor num">${brl(D.proj[0].total)}</div><div class="rotulo">em gastos</div></div>
   </div>
 
-  <div class="card"><h2>Projeção de gastos <small>próximos 6 meses</small></h2>
-    ${legenda([{ nome: 'Já comprometido (faturas e parcelas)', cor: c.gas }, { nome: 'Estimativa do dia a dia', cor: c.gas, tipo: 'hach' }, { nome: 'Média de entradas', cor: c.ent, tipo: 'tracejado' }])}
-    ${graficoColunas({ meses: D.futuros, empilhado: true, series: [{ nome: 'Comprometido', cor: c.gas, valores: D.proj.map(p => p.comp) }, { nome: 'Estimativa', cor: c.gas, hachura: true, valores: D.proj.map(p => p.est) }], linhas: [{ valor: D.mediaEnt, cor: c.ent }], vazio: 'Sem parcelas futuras' })}
-    <p class="rotulo">A estimativa usa a média dos gastos à vista (sem parcelas) dos últimos meses: ${brl(D.mediaVar)}/mês.</p>
-  </div>
-
-  <div class="card"><h2>Saldo geral <small>+ 3 meses projetados</small></h2>
-    ${legenda([{ nome: 'Saldo real', cor: c.saldo }, { nome: 'Projeção (média de entradas − gastos projetados)', cor: c.saldo, tipo: 'tracejado' }])}
-    ${graficoLinha(D.hist.concat(D.projSaldo), c.saldo)}
-  </div>
+  <div class="card"><h2>Insights do período</h2>${insights(ins)}</div>
 
   <div class="card"><h2>Entradas × gastos <small>por mês</small></h2>
-    ${legenda([{ nome: 'Entradas', cor: c.ent }, { nome: 'Gastos', cor: c.gas }])}
-    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: c.ent, valores: D.ent }, { nome: 'Gastos', cor: c.gas, valores: D.gas }] })}
+    ${legenda([{ nome: 'Entradas', cor: COR.ent }, { nome: 'Gastos', cor: COR.gas }])}
+    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: COR.ent, valores: D.ent }, { nome: 'Gastos', cor: COR.gas, valores: D.gas }] })}
+  </div>
+
+  <div class="card"><h2>Saldo geral <small>fim de cada mês</small></h2>
+    ${graficoLinha(hist, COR.saldo)}
   </div>
 
   <div class="card"><h2>Histórico de entradas <small>média ${brl(D.mediaEnt)}</small></h2>
-    ${legenda([{ nome: 'Entradas do mês', cor: c.ent }, { nome: 'Média', cor: 'var(--txt2)', tipo: 'tracejado' }])}
-    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: c.ent, valores: D.ent }], linhas: [{ valor: D.mediaEnt, cor: 'var(--txt2)' }] })}
+    ${legenda([{ nome: 'Entradas do mês', cor: COR.ent }, { nome: 'Média', cor: 'var(--txt2)', tipo: 'tracejado' }])}
+    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: COR.ent, valores: D.ent }], linhas: [{ valor: D.mediaEnt, cor: 'var(--txt2)' }] })}
   </div>
 
   <div class="card"><h2>Entradas por categoria <small>média mensal</small></h2>
-    ${barrasMedia(D.catEnt, 'Sem entradas no período')}
-    <p class="rotulo">Barra = média · traço = mês selecionado</p>
+    ${barras(catEnt, 'Sem entradas no período', { valor: x => x.media, marca: x => x.mes, sufixo: '/mês', tip: x => `<b>${esc(x.nome)}</b><span>Média mensal: ${brl(x.media)}</span><span>${nomeMes(S.mes, true)}: ${brl(x.mes)}</span><span>Total no período: ${brl(x.total)}</span>` })}
+    <p class="rotulo">Barra = média · traço = ${nomeMes(S.mes)}</p>
   </div>
 
   <div class="card"><h2>Gastos por categoria <small>média mensal</small></h2>
-    ${barrasMedia(D.catGas, 'Sem gastos no período')}
-    <p class="rotulo">Barra = média · traço = mês selecionado</p>
+    ${barras(catGas, 'Sem gastos no período', { valor: x => x.media, marca: x => x.mes, sufixo: '/mês', tip: x => `<b>${esc(x.nome)}</b><span>Média mensal: ${brl(x.media)}</span><span>${nomeMes(S.mes, true)}: ${brl(x.mes)}</span><span>Total no período: ${brl(x.total)}</span>` })}
+    <p class="rotulo">Barra = média · traço = ${nomeMes(S.mes)}</p>
   </div>
 
   <div class="card"><h2>Gastos por conta e cartão <small>6 meses</small></h2>
-    ${D.porConta.length ? D.porConta.map(x => `<div class="linha conta-linha" data-tip="${esc(`<b>${esc(x.c.nome)}</b>` + D.meses.map((ym, i) => `<span>${nomeMes(ym)}: ${brl(x.vals[i])}</span>`).join(''))}">
+    ${porConta.length ? porConta.map(x => `<div class="linha conta-linha" data-tip="${esc(`<b>${esc(x.c.nome)}</b>` + D.meses.map((ym, i) => `<span>${nomeMes(ym)}: ${brl(x.vals[i])}</span>`).join(''))}">
       <span class="ico" style="background:${esc(x.c.cor)}22;color:${esc(x.c.cor)}">${x.c.tipo === 'cartao' ? '💳' : '🏦'}</span>
       <span class="meio"><b>${esc(x.c.nome)}</b><span>média ${brlCurto(x.media)} · ${MESES[+S.mes.slice(5) - 1]} ${brlCurto(x.mes)}</span></span>
       ${miniColunas(x.vals, esc(x.c.cor))}
     </div>`).join('') : '<div class="vazio">Sem gastos no período</div>'}
   </div>`;
 }
-ligar.painel = () => ligarMesNav();
 
 /* tooltip dos gráficos (mouse e toque) */
 (function () {
