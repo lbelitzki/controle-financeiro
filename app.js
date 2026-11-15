@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const VERSAO = '1.3.0';
+const VERSAO = '1.4.0';
 const CHAVE_CFG = 'cf_config';
 const CHAVE_CACHE = 'cf_cache';
 const CHAVE_UI = 'cf_ui';
@@ -69,7 +69,7 @@ const carregando = on => ($('#carregando').hidden = !on);
 /* ============================================================ estado */
 const S = {
   cfg: null,
-  contas: [], categorias: [], lanc: [], planilha: '',
+  contas: [], categorias: [], lanc: [], plano: [], planilha: '',
   tela: 'inicio',
   mes: mesAtual(),
   ui: {},
@@ -89,11 +89,14 @@ function categoria(nome, tipo = 'despesa') {
 function aplicarDados(d) {
   S.contas = (d.contas || []).map(c => ({ ...c, id: String(c.id), fechamento: +c.fechamento || 0, vencimento: +c.vencimento || 0, saldo_inicial: num(c.saldo_inicial) }));
   S.categorias = d.categorias || [];
-  S.lanc = (d.lancamentos || []).map(l => ({
+  const todos = (d.lancamentos || []).map(l => ({
     ...l, id: String(l.id), valor: num(l.valor), data: String(l.data || '').slice(0, 10),
     fatura: String(l.fatura || '').slice(0, 7), parcela: +l.parcela || '', parcelas: +l.parcelas || '',
     conta: String(l.conta || ''), destino: String(l.destino || ''),
   }));
+  // tipo "plano" = entrada planejada (valor médio esperado por mês), usada só nas projeções
+  S.plano = todos.filter(l => l.tipo === 'plano');
+  S.lanc = todos.filter(l => l.tipo !== 'plano');
   S.planilha = d.planilha || S.planilha;
 }
 
@@ -427,20 +430,26 @@ function baseMedias() {
 }
 // faturas não pagas que já venceram ou vencem até o fim do mês atual
 
+const totalPlano = () => S.plano.reduce((s, l) => s + l.valor, 0);
+function entradaEsperada(B) {
+  const p = totalPlano();
+  return p > 0.004 ? { valor: p, fonte: 'planejado' } : { valor: B.mediaEnt, fonte: 'média' };
+}
+
 function dadosProjecao() {
-  const B = baseMedias(), atual = mesAtual();
+  const B = baseMedias(), atual = mesAtual(), E = entradaEsperada(B);
   const futuros = Array.from({ length: N_MESES }, (_, i) => somaMes(atual, i + 1));
   const proj = futuros.map(ym => {
     const ls = gastosDoMes(ym);
     const comp = soma(ls);
     const est = Math.max(0, B.mediaVar - soma(aVista(ls)));
-    return { ym, ls, comp, est, total: comp + est, ent: B.mediaEnt };
+    return { ym, ls, comp, est, total: comp + est, ent: E.valor };
   });
   const saldoHoje = contasCorrentes().reduce((s, c) => s + saldoConta(c), 0);
   const pendente = aPagarNoMes().total;
   let s = saldoHoje - pendente;
   proj.forEach(p => { s += p.ent - p.total; p.saldo = s; });
-  return { B, futuros, proj, saldoHoje, pendente, inicio: saldoHoje - pendente };
+  return { B, E, futuros, proj, saldoHoje, pendente, inicio: saldoHoje - pendente };
 }
 
 /* ---- gráficos em SVG ---- */
@@ -592,7 +601,7 @@ function painelAtual() {
   const parc = soma(desp.filter(l => l.parcelas > 1));
   if (parc > 0.004) ins.push({ ico: '🔁', txt: `${brl(parc)} (${pct(parc, totD)}%) dos gastos do mês são parcelas de compras anteriores.` });
   if (totE > 0.004) ins.push({ ico: totD > totE ? '⚠️' : '✅', alerta: totD > totE, txt: `Os gastos do mês equivalem a <b>${pct(totD, totE)}%</b> das entradas.` });
-  else if (B.mediaEnt > 0.004 && totD > 0) ins.push({ ico: 'ℹ️', txt: `Os gastos do mês equivalem a ${pct(totD, B.mediaEnt)}% da sua média de entradas.` });
+  else if (entradaEsperada(B).valor > 0.004 && totD > 0) ins.push({ ico: 'ℹ️', txt: `Os gastos do mês equivalem a ${pct(totD, entradaEsperada(B).valor)}% das entradas ${entradaEsperada(B).fonte === 'planejado' ? 'planejadas' : 'médias'}.` });
 
   return `<div class="resumo">
     <div class="card destaque"><div class="rotulo">Saldo geral nas contas</div><div class="valor num">${brl(saldoTotal)}</div></div>
@@ -662,6 +671,7 @@ function painelProjetado() {
 
   const ins = [];
   if (!n) ins.push({ ico: 'ℹ️', txt: 'Ainda não há histórico: a projeção considera só as parcelas e faturas já lançadas.' });
+  if (P.E.fonte === 'planejado') ins.push({ ico: '🎯', txt: `Entradas consideradas: <b>${brl(P.E.valor)}/mês</b> planejados (${S.plano.map(l => `${esc(l.descricao)} ${brl(l.valor)}`).join(' + ')}). Média real até agora: ${brl(B.mediaEnt)}.` });
   else if (B.mediaEnt <= 0.004) ins.push({ ico: 'ℹ️', txt: 'Sem entradas registradas no histórico: o saldo projetado considera só os gastos.' });
   if (P.pendente > 0.004) ins.push({ ico: '📌', txt: `Ainda faltam pagar ${brl(P.pendente)} com vencimento neste mês — já descontados do ponto de partida.` });
   if (totComp > 0.004) ins.push({ ico: '🔒', txt: `<b>${brl(totComp)}</b> já estão comprometidos em parcelas e faturas nos próximos 6 meses.` });
@@ -680,17 +690,17 @@ function painelProjetado() {
   return `<p class="rotulo centro">Próximos 6 meses · base: ${n ? `média de ${n} ${n === 1 ? 'mês' : 'meses'} (${nomeMes(B.comDados[0])}–${nomeMes(B.comDados[n - 1])})` : 'sem histórico ainda'}</p>
   <div class="resumo">
     <div class="card destaque"><div class="rotulo">Saldo previsto em ${nomeMes(ult.ym, true)}</div><div class="valor num">${brl(ult.saldo)}</div></div>
-    <div class="card"><div class="rotulo">Entradas esperadas</div><div class="valor num pos">${brl(B.mediaEnt)}</div><div class="rotulo">por mês</div></div>
+    <div class="card"><div class="rotulo">Entradas esperadas</div><div class="valor num pos">${brl(P.E.valor)}</div><div class="rotulo">por mês · ${P.E.fonte}</div></div>
     <div class="card"><div class="rotulo">Gastos previstos</div><div class="valor num neg">${brl(gastoMedio)}</div><div class="rotulo">por mês</div></div>
     <div class="card"><div class="rotulo">Já comprometido</div><div class="valor num">${brl(totComp)}</div><div class="rotulo">6 meses</div></div>
-    <div class="card"><div class="rotulo">Sobra prevista</div><div class="valor num ${B.mediaEnt - gastoMedio < 0 ? 'neg' : 'pos'}">${brl(B.mediaEnt - gastoMedio)}</div><div class="rotulo">por mês</div></div>
+    <div class="card"><div class="rotulo">Sobra prevista</div><div class="valor num ${P.E.valor - gastoMedio < 0 ? 'neg' : 'pos'}">${brl(P.E.valor - gastoMedio)}</div><div class="rotulo">por mês</div></div>
   </div>
 
   <div class="card"><h2>O que esperar</h2>${insights(ins)}</div>
 
   <div class="card"><h2>Gastos previstos <small>por mês</small></h2>
     ${legenda([{ nome: 'Já comprometido', cor: COR.gas }, { nome: 'Estimativa do dia a dia', cor: COR.gas, tipo: 'hach' }, { nome: 'Entradas esperadas', cor: COR.ent, tipo: 'tracejado' }])}
-    ${graficoColunas({ meses: P.futuros, empilhado: true, series: [{ nome: 'Comprometido', cor: COR.gas, valores: P.proj.map(p => p.comp) }, { nome: 'Estimativa', cor: COR.gas, hachura: true, valores: P.proj.map(p => p.est) }], linhas: [{ valor: B.mediaEnt, cor: COR.ent }], vazio: 'Sem parcelas futuras' })}
+    ${graficoColunas({ meses: P.futuros, empilhado: true, series: [{ nome: 'Comprometido', cor: COR.gas, valores: P.proj.map(p => p.comp) }, { nome: 'Estimativa', cor: COR.gas, hachura: true, valores: P.proj.map(p => p.est) }], linhas: [{ valor: P.E.valor, cor: COR.ent }], vazio: 'Sem parcelas futuras' })}
     <p class="rotulo">Estimativa = média dos gastos à vista (sem parcelas): ${brl(B.mediaVar)}/mês.</p>
   </div>
 
@@ -772,8 +782,8 @@ function painelHistorico() {
   </div>
 
   <div class="card"><h2>Histórico de entradas <small>média ${brl(D.mediaEnt)}</small></h2>
-    ${legenda([{ nome: 'Entradas do mês', cor: COR.ent }, { nome: 'Média', cor: 'var(--txt2)', tipo: 'tracejado' }])}
-    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: COR.ent, valores: D.ent }], linhas: [{ valor: D.mediaEnt, cor: 'var(--txt2)' }] })}
+    ${legenda([{ nome: 'Entradas do mês', cor: COR.ent }, { nome: 'Média', cor: 'var(--txt2)', tipo: 'tracejado' }].concat(totalPlano() > 0 ? [{ nome: `Planejado ${brlCurto(totalPlano())}`, cor: COR.ent, tipo: 'tracejado' }] : []))}
+    ${graficoColunas({ meses: D.meses, series: [{ nome: 'Entradas', cor: COR.ent, valores: D.ent }], linhas: [{ valor: D.mediaEnt, cor: 'var(--txt2)' }].concat(totalPlano() > 0 ? [{ valor: totalPlano(), cor: COR.ent }] : []) })}
   </div>
 
   <div class="card"><h2>Entradas por categoria <small>média mensal</small></h2>
@@ -1162,6 +1172,12 @@ function telaAjustes() {
     ${S.contas.map(c => `<button class="linha" data-conta="${esc(c.id)}"><span class="ico" style="background:${esc(c.cor)}22;color:${esc(c.cor)}">${c.tipo === 'cartao' ? '💳' : '🏦'}</span>
       <span class="meio"><b>${esc(c.nome)}</b><span>${esc(c.titular || '')} · ${c.tipo === 'cartao' ? `fecha dia ${c.fechamento}, vence dia ${c.vencimento}` : 'conta'}</span></span><span class="dir">›</span></button>`).join('')}
   </div>
+  <div class="card"><h2>Entradas planejadas <button class="link" id="novo-plano">+ Adicionar</button></h2>
+    ${S.plano.map(l => `<button class="linha" data-plano="${esc(l.id)}"><span class="ico" style="background:var(--pri-claro);color:var(--pri)">🎯</span>
+      <span class="meio"><b>${esc(l.descricao)}</b><span>${esc(l.categoria || '')}${l.conta ? ' · ' + esc(contaPorId(l.conta)?.nome || '') : ''}</span></span><span class="dir num">${brl(l.valor)}</span></button>`).join('') || '<div class="vazio">Nenhuma — a projeção usa a média do histórico</div>'}
+    ${S.plano.length ? `<div class="linha total"><div class="meio"><b>Total por mês</b></div><div class="dir num">${brl(totalPlano())}</div></div>` : ''}
+    <p class="rotulo">Valor médio que você espera receber por mês. É usado na aba Projetado no lugar da média do histórico; as entradas reais continuam sendo lançadas normalmente.</p>
+  </div>
   <div class="card"><h2>Categorias <button class="link" id="nova-cat">+ Adicionar</button></h2>
     ${['despesa', 'entrada'].map(t => `<p class="rotulo">${t === 'despesa' ? 'Despesas' : 'Entradas'}</p><div class="chips" style="flex-wrap:wrap">${S.categorias.filter(c => c.tipo === t).map(c => `<button class="chip" data-delcat="${esc(c.nome)}|${t}">${esc(c.icone)} ${esc(c.nome)}</button>`).join('')}</div>`).join('')}
     <p class="rotulo">Toque numa categoria para removê-la (os lançamentos antigos não mudam).</p>
@@ -1176,6 +1192,8 @@ ligar.ajustes = () => {
   $$('[data-conta]').forEach(b => b.onclick = () => editarConta(contaPorId(b.dataset.conta)));
   $('#nova-conta').onclick = () => editarConta(null);
   $('#nova-cat').onclick = novaCategoria;
+  $('#novo-plano').onclick = () => editarPlano(null);
+  $$('[data-plano]').forEach(b => b.onclick = () => editarPlano(S.plano.find(l => l.id === b.dataset.plano)));
   $$('[data-delcat]').forEach(b => b.onclick = () => {
     const [nome, tipo] = b.dataset.delcat.split('|');
     abrirModal(`<h3>Remover "${esc(nome)}"?<button id="m-fechar">✕</button></h3><p class="rotulo">Lançamentos que já usam essa categoria continuam com ela.</p>
@@ -1238,6 +1256,28 @@ function editarConta(c) {
     fecharModal();
     await enviar('salvarContas', { itens: [item] }, 'Salvo');
   };
+}
+
+function editarPlano(l) {
+  abrirModal(`<h3>${l ? 'Editar' : 'Nova'} entrada planejada<button id="m-fechar">✕</button></h3>
+    <div class="campo"><label for="p-nome">Nome</label><input id="p-nome" value="${esc(l?.descricao || '')}" placeholder="Ex.: Salários, Fotos"></div>
+    <div class="campo"><label for="p-valor">Valor médio por mês</label><input id="p-valor" inputmode="decimal" value="${l ? esc(String(l.valor).replace('.', ',')) : ''}" placeholder="0,00"></div>
+    <div class="dupla campo">
+      <div><label class="rotulo" for="p-cat">Categoria</label><select id="p-cat">${S.categorias.filter(c => c.tipo === 'entrada').map(c => `<option ${c.nome === l?.categoria ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      <div><label class="rotulo" for="p-conta">Cai em</label><select id="p-conta"><option value="">Qualquer conta</option>${opcoesContas(contasCorrentes(), l?.conta)}</select></div>
+    </div>
+    <button class="btn" id="p-salvar">Salvar</button>
+    ${l ? '<button class="btn perigo" id="p-excluir">Remover</button>' : ''}`);
+  $('#m-fechar').onclick = fecharModal;
+  $('#p-salvar').onclick = async () => {
+    const nome = $('#p-nome').value.trim(), valor = lerValor($('#p-valor').value);
+    if (!nome) return toast('Informe o nome', true);
+    if (!(valor > 0)) return toast('Informe o valor', true);
+    const item = { ...(l || {}), id: l?.id || novoId('p'), tipo: 'plano', data: l?.data || hoje(), descricao: nome, valor,
+      categoria: $('#p-cat').value, conta: $('#p-conta').value, obs: 'Entrada planejada (média mensal)' };
+    fecharModal(); await enviar('salvar', { itens: [item] }, 'Salvo');
+  };
+  if (l) $('#p-excluir').onclick = async () => { fecharModal(); await enviar('excluir', { ids: [l.id] }, 'Removida'); };
 }
 
 function novaCategoria() {

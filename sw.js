@@ -1,6 +1,6 @@
 // Service worker: rede primeiro (para receber melhorias na hora),
 // cache como reserva (para abrir sem internet).
-const CACHE = 'financas-v4';
+const CACHE = 'financas-v5';
 const ARQUIVOS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
