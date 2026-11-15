@@ -239,3 +239,4 @@ svg.mini { width: 66px; height: 22px; flex: none; }
 .tabela th, .tabela td { padding: 7px 4px; text-align: right; border-top: 1px solid var(--linha); white-space: nowrap; }
 .tabela thead th { border-top: 0; color: var(--txt2); font-weight: 500; font-size: 12px; }
 .tabela tbody th { text-align: left; font-weight: 500; text-transform: capitalize; }
+.saldo-geral .prox { opacity: .8; font-size: 13px; }

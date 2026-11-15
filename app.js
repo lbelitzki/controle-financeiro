@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const VERSAO = '1.2.0';
+const VERSAO = '1.3.0';
 const CHAVE_CFG = 'cf_config';
 const CHAVE_CACHE = 'cf_cache';
 const CHAVE_UI = 'cf_ui';
@@ -43,6 +43,8 @@ function somaMes(ym, n) {
   return `${y}-${pad(m)}`;
 }
 const ultimoDia = (y, m) => new Date(y, m, 0).getDate();
+// mesma data k meses depois (dia ajustado ao fim do mês: 31/01 + 1 = 28/02)
+function somaMesData(d, k) { const [y, m, dd] = d.split('-').map(Number); const ym = somaMes(`${y}-${pad(m)}`, k); const [y2, m2] = ym.split('-').map(Number); return `${ym}-${pad(Math.min(dd, ultimoDia(y2, m2)))}`; }
 function nomeMes(ym, longo) {
   const [y, m] = ym.split('-').map(Number);
   return longo ? `${MESES_LONGOS[m - 1]} ${y}` : `${MESES[m - 1]}/${String(y).slice(2)}`;
@@ -146,8 +148,10 @@ function faturasDoCartao(contaId) {
 function saldoConta(c) {
   let s = c.saldo_inicial || 0;
   const desde = c.data_saldo ? String(c.data_saldo).slice(0, 10) : '';
+  const h = hoje();
   for (const l of S.lanc) {
     if (desde && l.data <= desde) continue;
+    if (l.data > h) continue; // ainda não aconteceu: só entra no saldo no dia do vencimento
     if (l.conta === c.id) {
       if (l.tipo === 'entrada') s += l.valor;
       else if (l.tipo === 'despesa' || l.tipo === 'pagamento' || l.tipo === 'transferencia') s -= l.valor;
@@ -292,14 +296,16 @@ function telaInicio() {
 
   const contas = contasCorrentes();
   const saldoTotal = contas.reduce((s, c) => s + saldoConta(c), 0);
-  const emAberto = faturasEmAberto();
+  const pagar = aPagarNoMes(), emAberto = pagar.total, proxFat = proximasFaturas().reduce((s, f) => s + f.restante, 0);
+  const nomeM = MESES_LONGOS[+mesAtual().slice(5) - 1];
 
   return `<div class="card saldo-geral">
     <div class="rotulo">Saldo geral nas contas</div>
     <div class="valor num">${brl(saldoTotal)}</div>
     <div class="saldo-linhas">
-      <span>Faturas em aberto <b class="num">${brl(emAberto)}</b></span>
-      <span>Livre após faturas <b class="num">${brl(saldoTotal - emAberto)}</b></span>
+      <span>A pagar em ${nomeM} <b class="num">${brl(emAberto)}</b></span>
+      <span>Livre no mês <b class="num">${brl(saldoTotal - emAberto)}</b></span>
+      ${proxFat > 0.004 ? `<span class="prox">Próximas faturas (não descontadas) <b class="num">${brl(proxFat)}</b></span>` : ''}
     </div>
   </div>
   ${mesNav()}
@@ -330,13 +336,19 @@ function telaInicio() {
     <div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num ${saldoTotal < 0 ? 'neg' : ''}">${brl(saldoTotal)}</div></div>
   </div>` : ''}`;
 }
-// soma do que falta pagar em faturas já fechadas/vencidas e na fatura aberta atual de cada cartão
-function faturasEmAberto() {
-  const h = hoje();
-  return cartoes().reduce((s, c) => {
-    const atual = faturaDaCompra(c, h);
-    return s + faturasDoCartao(c.id).filter(f => f.ym <= atual && f.status !== 'paga').reduce((x, f) => x + f.restante, 0);
-  }, 0);
+// O que pesa no mês atual: faturas que vencem até o fim deste mês (ou já venceram) e não foram pagas,
+// mais despesas de conta com vencimento ainda neste mês. O que vence nos próximos meses NÃO entra.
+function aPagarNoMes() {
+  const M = mesAtual(), h = hoje();
+  const faturas = cartoes().flatMap(c => faturasDoCartao(c.id).filter(f => f.ym <= M && f.restante > 0.004));
+  const agendados = S.lanc.filter(l => l.tipo === 'despesa' && l.conta && !ehCartao(l.conta) && l.data > h && l.data.slice(0, 7) === M);
+  const totFat = faturas.reduce((s, f) => s + f.restante, 0), totAg = agendados.reduce((s, l) => s + l.valor, 0);
+  return { faturas, agendados, totFat, totAg, total: totFat + totAg };
+}
+// faturas que estão se formando agora e vencem nos próximos meses (só informativo)
+function proximasFaturas() {
+  const M = mesAtual(), h = hoje();
+  return cartoes().flatMap(c => faturasDoCartao(c.id).filter(f => f.ym > M && f.ym <= faturaDaCompra(c, h) && f.restante > 0.004));
 }
 function miniFatura(f) {
   return `<button class="mini-fatura" data-fatura="${esc(f.conta.id)}|${f.ym}">
@@ -414,7 +426,6 @@ function baseMedias() {
   return fechados.comDados.length >= 3 ? fechados : janela(mesAtual());
 }
 // faturas não pagas que já venceram ou vencem até o fim do mês atual
-const faturasDoMesEmAberto = () => cartoes().flatMap(c => faturasDoCartao(c.id).filter(f => f.ym <= mesAtual() && f.status !== 'paga' && f.status !== 'vazia'));
 
 function dadosProjecao() {
   const B = baseMedias(), atual = mesAtual();
@@ -426,7 +437,7 @@ function dadosProjecao() {
     return { ym, ls, comp, est, total: comp + est, ent: B.mediaEnt };
   });
   const saldoHoje = contasCorrentes().reduce((s, c) => s + saldoConta(c), 0);
-  const pendente = faturasDoMesEmAberto().reduce((s, f) => s + f.restante, 0);
+  const pendente = aPagarNoMes().total;
   let s = saldoHoje - pendente;
   proj.forEach(p => { s += p.ent - p.total; p.saldo = s; });
   return { B, futuros, proj, saldoHoje, pendente, inicio: saldoHoje - pendente };
@@ -542,6 +553,7 @@ function telaPainel() {
   return seg + ({ atual: painelAtual, projetado: painelProjetado, historico: painelHistorico })[aba]();
 }
 ligar.painel = () => {
+  ligarLinhas();
   $$('[data-paba]').forEach(b => b.onclick = () => { S.ui.painelAba = b.dataset.paba; salvarUI(); render(); });
   ligarMesNav(); ligarMiniFaturas();
 };
@@ -551,14 +563,11 @@ function painelAtual() {
   const M = mesAtual(), B = janela(somaMes(M, -1)); // médias dos meses anteriores, para comparar
   const contas = contasCorrentes().map(c => ({ c, v: saldoConta(c) }));
   const saldoTotal = contas.reduce((s, x) => s + x.v, 0);
-  // faturas em aberto: todas as não pagas até a fatura atual de cada cartão
-  const fats = cartoes().flatMap(c => {
-    const at = faturaDaCompra(c, hoje());
-    const ab = faturasDoCartao(c.id).filter(f => f.ym <= at && f.status !== 'paga' && f.status !== 'vazia');
-    return ab.length ? ab : [];
-  });
-  const totFat = fats.reduce((s, f) => s + f.restante, 0);
+  // só pesa no mês o que vence neste mês; faturas que vencem depois aparecem à parte
+  const pagar = aPagarNoMes(), fats = pagar.faturas, totFat = pagar.total;
+  const prox = proximasFaturas(), totProx = prox.reduce((s, f) => s + f.restante, 0);
   const emDia = cartoes().filter(c => !fats.some(f => f.conta.id === c.id));
+  const nomeM = MESES_LONGOS[+M.slice(5) - 1];
 
   const desp = gastosDoMes(M), totD = soma(desp), totE = soma(entradasDoMes(M));
   const cats = B.porCat('despesa', gastosDoMes, M).filter(x => x.mes > 0.004).sort((a, b) => b.mes - a.mes);
@@ -568,7 +577,7 @@ function painelAtual() {
 
   // insights do mês
   const ins = [];
-  if (saldoTotal - totFat < 0) ins.push({ ico: '⚠️', alerta: true, txt: `As faturas em aberto (<b>${brl(totFat)}</b>) passam do saldo das contas em <b>${brl(totFat - saldoTotal)}</b>.` });
+  if (saldoTotal - totFat < 0) ins.push({ ico: '⚠️', alerta: true, txt: `O que vence em ${nomeM} (<b>${brl(totFat)}</b>) passa do saldo das contas em <b>${brl(totFat - saldoTotal)}</b>.` });
   if (cats[0]) ins.push({ ico: '🏆', txt: `Onde você mais gasta: <b>${esc(cats[0].nome)}</b>, ${brl(cats[0].mes)} (${pct(cats[0].mes, totD)}% dos gastos do mês).` });
   if (temMedia) {
     const acima = cats.filter(x => x.media > 0.004 && x.mes - x.media > 50 && x.mes > x.media * 1.2).sort((a, b) => (b.mes - b.media) - (a.mes - a.media))[0];
@@ -587,8 +596,8 @@ function painelAtual() {
 
   return `<div class="resumo">
     <div class="card destaque"><div class="rotulo">Saldo geral nas contas</div><div class="valor num">${brl(saldoTotal)}</div></div>
-    <div class="card"><div class="rotulo">Faturas em aberto</div><div class="valor num neg">${brl(totFat)}</div></div>
-    <div class="card"><div class="rotulo">Livre após faturas</div><div class="valor num ${saldoTotal - totFat < 0 ? 'neg' : 'pos'}">${brl(saldoTotal - totFat)}</div></div>
+    <div class="card"><div class="rotulo">A pagar em ${nomeM}</div><div class="valor num neg">${brl(totFat)}</div></div>
+    <div class="card"><div class="rotulo">Livre no mês</div><div class="valor num ${saldoTotal - totFat < 0 ? 'neg' : 'pos'}">${brl(saldoTotal - totFat)}</div></div>
   </div>
 
   <div class="card"><h2>Contas <small>${brl(saldoTotal)}</small></h2>
@@ -596,11 +605,17 @@ function painelAtual() {
       `<div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num ${saldoTotal < 0 ? 'neg' : ''}">${brl(saldoTotal)}</div></div>` : '<div class="vazio">Nenhuma conta cadastrada</div>'}
   </div>
 
-  <div class="card"><h2>Faturas em aberto <small>${brl(totFat)}</small></h2>
-    ${fats.length ? fats.map(miniFatura).join('') : '<div class="vazio">Nenhuma fatura em aberto</div>'}
-    ${fats.length > 1 ? `<div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num">${brl(totFat)}</div></div>` : ''}
+  <div class="card"><h2>A pagar em ${nomeM} <small>${brl(totFat)}</small></h2>
+    ${fats.length ? fats.map(miniFatura).join('') : '<div class="vazio">Nenhuma fatura vencendo neste mês</div>'}
+    ${pagar.agendados.map(linhaLanc).join('')}
+    ${fats.length + pagar.agendados.length > 1 ? `<div class="linha total"><div class="meio"><b>Total</b></div><div class="dir num">${brl(totFat)}</div></div>` : ''}
     ${emDia.length ? `<p class="rotulo">Em dia: ${emDia.map(c => esc(c.nome)).join(', ')}</p>` : ''}
   </div>
+
+  ${prox.length ? `<div class="card"><h2>Próximas faturas <small>${brl(totProx)}</small></h2>
+    ${prox.map(miniFatura).join('')}
+    <p class="rotulo">Vencem nos próximos meses, por isso não entram no saldo de ${nomeM}.</p>
+  </div>` : ''}
 
   <div class="card"><h2>${MESES_LONGOS[+M.slice(5) - 1][0].toUpperCase() + MESES_LONGOS[+M.slice(5) - 1].slice(1)} até agora</h2>
     <div class="tres-num">
@@ -648,7 +663,7 @@ function painelProjetado() {
   const ins = [];
   if (!n) ins.push({ ico: 'ℹ️', txt: 'Ainda não há histórico: a projeção considera só as parcelas e faturas já lançadas.' });
   else if (B.mediaEnt <= 0.004) ins.push({ ico: 'ℹ️', txt: 'Sem entradas registradas no histórico: o saldo projetado considera só os gastos.' });
-  if (P.pendente > 0.004) ins.push({ ico: '📌', txt: `Ainda faltam pagar ${brl(P.pendente)} em faturas deste mês — já descontados do ponto de partida.` });
+  if (P.pendente > 0.004) ins.push({ ico: '📌', txt: `Ainda faltam pagar ${brl(P.pendente)} com vencimento neste mês — já descontados do ponto de partida.` });
   if (totComp > 0.004) ins.push({ ico: '🔒', txt: `<b>${brl(totComp)}</b> já estão comprometidos em parcelas e faturas nos próximos 6 meses.` });
   const aperto = P.proj.slice().sort((a, b) => (a.ent - a.total) - (b.ent - b.total))[0];
   if (aperto && aperto.total > 0.004) ins.push({ ico: aperto.ent - aperto.total < 0 ? '⚠️' : '📅', alerta: aperto.ent - aperto.total < 0, txt: `Mês mais apertado: <b>${nomeMes(aperto.ym, true)}</b>, com ${brl(aperto.total)} em gastos previstos${aperto.ent > 0 ? ` (${aperto.ent - aperto.total < 0 ? 'falta' : 'sobra'} ${brl(Math.abs(aperto.ent - aperto.total))})` : ''}.` });
@@ -919,7 +934,10 @@ function telaLancar() {
     const cartao = ehCartao(F.conta);
     const n = Math.max(1, +F.parcelas || 1);
     let dica = '';
-    if (cartao && F.data) {
+    if (!cartao && F.data && F.parcelado && n > 1) {
+      const v = lerValor(F.valor), parc = F.modoValor === 'parcela' ? v : v / n;
+      dica = `<div class="dica">${n}x de <b>${isNaN(parc) ? '—' : brl(parc)}</b> · vencem de <b>${dataCurta(F.data)}</b> até <b>${dataCurta(somaMesData(F.data, n - 1))} ${somaMesData(F.data, n - 1).slice(0, 4)}</b>. Cada parcela só sai do saldo no próprio vencimento.</div>`;
+    } else if (cartao && F.data) {
       const f0 = F.faturaManual || faturaDaCompra(contaPorId(F.conta), F.data);
       const v = lerValor(F.valor);
       const parc = F.parcelado && n > 1 ? (F.modoValor === 'parcela' ? v : v / n) : v;
@@ -932,14 +950,14 @@ function telaLancar() {
       <div class="campo"><label for="f-conta">Pago com</label><select id="f-conta">
         <optgroup label="Cartões">${opcoesContas(cartoes(), F.conta)}</optgroup>
         <optgroup label="Conta / Pix / Débito">${opcoesContas(contasCorrentes(), F.conta)}</optgroup></select></div>
-      ${data}
-      ${cartao ? `<div class="campo"><label class="alternar">Parcelado?<input type="checkbox" id="f-parcelado" ${F.parcelado ? 'checked' : ''}></label></div>
+      ${!cartao && F.parcelado ? data.replace('>Data<', '>Vencimento da 1ª parcela<') : data}
+      <div class="campo"><label class="alternar">Parcelado?<input type="checkbox" id="f-parcelado" ${F.parcelado ? 'checked' : ''}></label></div>
         ${F.parcelado ? `<div class="dupla campo">
           <div><label class="rotulo" for="f-n">Quantas vezes</label><select id="f-n">${Array.from({ length: 23 }, (_, i) => i + 2).map(i => `<option ${i === n ? 'selected' : ''}>${i}</option>`).join('')}</select></div>
           <div><label class="rotulo" for="f-modo">O valor digitado é</label><select id="f-modo"><option value="total" ${F.modoValor !== 'parcela' ? 'selected' : ''}>o total</option><option value="parcela" ${F.modoValor === 'parcela' ? 'selected' : ''}>de cada parcela</option></select></div>
         </div>` : ''}
         ${dica}
-        <div class="campo"><label for="f-fatura">Fatura (1ª parcela)</label><select id="f-fatura">${[-1, 0, 1, 2].map(k => { const auto = faturaDaCompra(contaPorId(F.conta), F.data); const ym = somaMes(auto, k); return `<option value="${k === 0 ? '' : ym}" ${(F.faturaManual || '') === (k === 0 ? '' : ym) ? 'selected' : ''}>${nomeMes(ym, true)}${k === 0 ? ' (automático)' : ''}</option>`; }).join('')}</select></div>` : ''}
+      ${cartao ? `<div class="campo"><label for="f-fatura">Fatura (1ª parcela)</label><select id="f-fatura">${[-1, 0, 1, 2].map(k => { const auto = faturaDaCompra(contaPorId(F.conta), F.data); const ym = somaMes(auto, k); return `<option value="${k === 0 ? '' : ym}" ${(F.faturaManual || '') === (k === 0 ? '' : ym) ? 'selected' : ''}>${nomeMes(ym, true)}${k === 0 ? ' (automático)' : ''}</option>`; }).join('')}</select></div>` : ''}
       ${obs}
       <button class="btn" id="salvar">Lançar despesa</button>`;
   }
@@ -1035,7 +1053,7 @@ async function salvarForm() {
     if (!F.categoria) return toast('Escolha uma categoria', true);
     const desc = (F.descricao || '').trim() || F.categoria;
     const cartao = ehCartao(F.conta);
-    const n = cartao && F.parcelado ? Math.max(2, +F.parcelas || 2) : 1;
+    const n = F.parcelado ? Math.max(2, +F.parcelas || 2) : 1;
     const f0 = cartao ? (F.faturaManual || faturaDaCompra(contaPorId(F.conta), F.data)) : '';
     if (n === 1) {
       itens.push({ ...base, id: novoId('l'), descricao: desc, categoria: F.categoria, fatura: f0 });
@@ -1045,7 +1063,8 @@ async function salvarForm() {
       const grupo = novoId('g');
       for (let i = 1; i <= n; i++) {
         const v = i === n ? Math.round((total - parc * (n - 1)) * 100) / 100 : parc;
-        itens.push({ ...base, id: novoId('l'), valor: v, descricao: desc, categoria: F.categoria, parcela: i, parcelas: n, grupo, fatura: somaMes(f0, i - 1) });
+        itens.push({ ...base, id: novoId('l'), valor: v, descricao: desc, categoria: F.categoria, parcela: i, parcelas: n, grupo,
+          ...(cartao ? { fatura: somaMes(f0, i - 1) } : { data: somaMesData(F.data, i - 1) }) });
       }
     }
     S.ui.ultimaConta = F.conta;
