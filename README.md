@@ -41,6 +41,13 @@ Em compras no cartão, a coluna `fatura` (AAAA-MM) é o mês de vencimento da fa
 python3 privado/servidor_teste.py
 ```
 
+## Segurança e backup
+
+- O token de acesso fica nas Propriedades do Script; `trocarToken()` gera um novo e invalida o antigo.
+- `ativarBackup()` (rodar uma vez) cria uma cópia diária da planilha na pasta "Backups Finanças" do Drive (últimos 30 dias).
+- Excluir um lançamento move a linha para a aba `Lixeira` em vez de apagar.
+- O backend valida tipo, data e valor de tudo que recebe e grava textos sem deixar virar fórmula.
+
 ## Atualizar o backend
 
 Depois de mudar `Code.gs`: **Implantar › Gerenciar implantações › editar › Nova versão**

@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const VERSAO = '1.4.0';
+const VERSAO = '1.5.0';
 const CHAVE_CFG = 'cf_config';
 const CHAVE_CACHE = 'cf_cache';
 const CHAVE_UI = 'cf_ui';
@@ -98,6 +98,7 @@ function aplicarDados(d) {
   S.plano = todos.filter(l => l.tipo === 'plano');
   S.lanc = todos.filter(l => l.tipo !== 'plano');
   S.planilha = d.planilha || S.planilha;
+  S.apiV = +d.api || 1;
 }
 
 /* ============================================================ regras de cartão */
@@ -165,16 +166,37 @@ function saldoConta(c) {
 }
 
 /* ============================================================ API */
+// O app só conversa com o Apps Script do Google (ou com o servidor de teste local).
+function urlPermitida(u) {
+  try {
+    const x = new URL(u);
+    if (x.protocol === 'https:' && x.hostname === 'script.google.com' && x.pathname.startsWith('/macros/s/')) return true;
+    return x.protocol === 'http:' && (x.hostname === 'localhost' || x.hostname === '127.0.0.1') && ['localhost', '127.0.0.1'].includes(location.hostname);
+  } catch { return false; }
+}
+
 async function api(acao, dados = {}) {
   if (!S.cfg) throw new Error('App não configurado');
-  let r;
-  if (acao === 'ler') {
-    r = await fetch(`${S.cfg.u}?token=${encodeURIComponent(S.cfg.t)}&_=${Date.now()}`);
-  } else {
-    r = await fetch(S.cfg.u, { method: 'POST', body: JSON.stringify({ token: S.cfg.t, acao, ...dados }) });
+  if (!urlPermitida(S.cfg.u)) throw new Error('Endereço da planilha inválido');
+  // o token vai sempre no corpo do pedido, nunca no endereço
+  const pedir = async (a, d) => {
+    const r = await fetch(S.cfg.u, { method: 'POST', body: JSON.stringify({ token: S.cfg.t, acao: a, ...d }) });
+    if (!r.ok) throw new Error('Erro de conexão (' + r.status + ')');
+    return r.json();
+  };
+  let j = await pedir(acao, dados);
+  // planilha ainda com o backend antigo: usa o caminho antigo até ele ser atualizado
+  if (!j.ok && /desconhecida/i.test(j.erro || '')) {
+    if (acao === 'ler') {
+      const r = await fetch(`${S.cfg.u}?token=${encodeURIComponent(S.cfg.t)}&_=${Date.now()}`);
+      if (!r.ok) throw new Error('Erro de conexão (' + r.status + ')');
+      j = await r.json();
+    } else if (acao === 'adicionarCategoria') {
+      j = await pedir('salvarCategorias', { itens: [...S.categorias, dados.item] });
+    } else if (acao === 'removerCategoria') {
+      j = await pedir('salvarCategorias', { itens: S.categorias.filter(c => !(c.nome === dados.nome && c.tipo === dados.tipo)) });
+    }
   }
-  if (!r.ok) throw new Error('Erro de conexão (' + r.status + ')');
-  const j = await r.json();
   if (!j.ok) throw new Error(j.erro === 'nao_autorizado' ? 'Código de acesso inválido' : j.erro);
   aplicarDados(j.dados);
   try { localStorage.setItem(CHAVE_CACHE, JSON.stringify(j.dados)); } catch {}
@@ -242,8 +264,8 @@ function decodificarCodigo(txt) {
   const m = txt.match(/[#?&]c=([\w\-=]+)/); if (m) txt = m[1];
   const b = txt.replace(/-/g, '+').replace(/_/g, '/');
   const j = JSON.parse(decodeURIComponent(escape(atob(b))));
-  if (!j.u || !j.t) throw new Error();
-  return j;
+  if (typeof j.u !== 'string' || typeof j.t !== 'string' || !j.t || !urlPermitida(j.u)) throw new Error();
+  return { u: j.u, t: j.t };
 }
 function ligarSetup() {
   $('#conectar').onclick = async () => {
@@ -1158,7 +1180,7 @@ function abrirEdicao(id) {
       });
     } else {
       abrirModal(`<h3>Excluir lançamento?<button id="m-fechar">✕</button></h3>
-        <p>"${esc(l.descricao)}" · ${brl(l.valor)}</p><p class="rotulo">A linha será apagada da planilha.</p>
+        <p>"${esc(l.descricao)}" · ${brl(l.valor)}</p><p class="rotulo">${S.apiV >= 2 ? 'A linha sai dos lançamentos e fica guardada na aba "Lixeira" da planilha.' : 'A linha será apagada da planilha.'}</p>
         <button class="btn perigo" id="m-sim">Excluir</button><button class="btn sec" id="m-cancelar">Cancelar</button>`);
       $('#m-fechar').onclick = $('#m-cancelar').onclick = fecharModal;
       $('#m-sim').onclick = async () => { fecharModal(); await enviar('excluir', { ids: [l.id] }, 'Excluído'); };
@@ -1199,7 +1221,7 @@ ligar.ajustes = () => {
     abrirModal(`<h3>Remover "${esc(nome)}"?<button id="m-fechar">✕</button></h3><p class="rotulo">Lançamentos que já usam essa categoria continuam com ela.</p>
       <button class="btn perigo" id="m-sim">Remover</button><button class="btn sec" id="m-cancelar">Cancelar</button>`);
     $('#m-fechar').onclick = $('#m-cancelar').onclick = fecharModal;
-    $('#m-sim').onclick = async () => { fecharModal(); await enviar('salvarCategorias', { itens: S.categorias.filter(c => !(c.nome === nome && c.tipo === tipo)) }, 'Removida'); };
+    $('#m-sim').onclick = async () => { fecharModal(); await enviar('removerCategoria', { nome, tipo }, 'Removida'); };
   });
   $('#sair').onclick = () => {
     abrirModal(`<h3>Desconectar?<button id="m-fechar">✕</button></h3><p class="rotulo">Os dados continuam na planilha. Você vai precisar colar o código de novo.</p>
@@ -1295,13 +1317,14 @@ function novaCategoria() {
     if (!nome) return toast('Informe o nome', true);
     if (S.categorias.find(c => c.nome === nome && c.tipo === tipo)) return toast('Essa categoria já existe', true);
     fecharModal();
-    await enviar('salvarCategorias', { itens: [...S.categorias, { nome, tipo, cor: $('#n-cor').value, icone: $('#n-icone').value || '•' }] }, 'Categoria criada');
+    await enviar('adicionarCategoria', { item: { nome, tipo, cor: $('#n-cor').value, icone: $('#n-icone').value || '•' } }, 'Categoria criada');
   };
 }
 
 /* ============================================================ início do app */
 (function iniciar() {
   try { S.cfg = JSON.parse(localStorage.getItem(CHAVE_CFG)); } catch { S.cfg = null; }
+  if (S.cfg && !(typeof S.cfg.t === 'string' && urlPermitida(S.cfg.u))) S.cfg = null;
   // código via link (#c=...)
   const m = location.hash.match(/c=([\w\-=]+)/);
   if (m && !S.cfg) {
